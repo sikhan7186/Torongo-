@@ -1,0 +1,1396 @@
+<!DOCTYPE html>
+<!--
+====================================================================
+তরঙ্গ — পুশ নোটিফিকেশন (FCM) সেটআপ গাইড
+====================================================================
+ব্রাউজার/ট্যাব সম্পূর্ণ বন্ধ থাকা অবস্থাতেও মেসেজ নোটিফিকেশন পেতে এই ধাপগুলো
+অনুসরণ করুন। (এই HTML ফাইল ছাড়াও আরও দুটো ফাইল লাগবে —
+firebase-messaging-sw.js ও functions-index.js — কারণ একটা ব্রাউজার
+Service Worker আর অন্যটা Google-এর সার্ভারে চলা Cloud Function, এই দুইটা
+ব্রাউজার নিয়ম ও ভিন্ন এক্সিকিউশন এনভায়রনমেন্টের কারণে এই HTML ফাইলের
+ভেতরে ইনলাইন করে চালানো সম্ভব না।)
+
+ধাপ ১: Blaze প্ল্যানে আপগ্রেড
+--------------------------------
+Firebase Console → torongo-59fce প্রজেক্ট → নিচে বাম দিকে "Upgrade" বাটনে
+ক্লিক করে Blaze প্ল্যান চালু করুন (ব্যাংক কার্ড লাগবে)। এই সাইজের অ্যাপের
+জন্য মাসিক ফ্রি কোটার মধ্যেই খরচ থাকবে।
+
+ধাপ ২: VAPID Key জেনারেট করুন
+--------------------------------
+1. Firebase Console → ⚙️ Project Settings → Cloud Messaging ট্যাব
+2. "Web configuration" সেকশনে Generate key pair বাটনে ক্লিক করুন
+3. যে key-টা পাবেন, সেটা কপি করে এই ফাইলের নিচে VAPID_KEY = "YOUR_VAPID_KEY"
+   জায়গায় বসান
+
+ধাপ ৩: ফাইল প্লেসমেন্ট
+--------------------------------
+firebase-messaging-sw.js ফাইলটা এই torongo.html-এর ঠিক পাশেই, একই
+ফোল্ডারে রাখুন যখন ডিপ্লয় করবেন। যেমনঃ
+  your-repo/
+    torongo.html
+    firebase-messaging-sw.js
+
+ধাপ ৪: Cloud Function ডিপ্লয় করুন
+--------------------------------
+নিজের কম্পিউটারে (Node.js ইনস্টল থাকা লাগবে):
+
+  npm install -g firebase-tools
+  firebase login
+  mkdir torongo-functions && cd torongo-functions
+  firebase init functions
+
+- "Use an existing project" বেছে torongo-59fce সিলেক্ট করুন
+- ভাষা হিসেবে JavaScript বেছে নিন
+- ESLint চাইলে "No" দিতে পারেন, dependencies ইনস্টল করতে "Yes" দিন
+
+এবার functions/index.js ফাইলের সব কনটেন্ট মুছে functions-index.js
+(যেটা আলাদাভাবে দেওয়া হয়েছে) থেকে কপি করে বসিয়ে দিন।
+
+functions/package.json-এ dependencies এভাবে থাকা দরকার:
+  cd functions
+  npm install firebase-admin firebase-functions
+
+ডিপ্লয় করুন:
+  firebase deploy --only functions
+
+ধাপ ৫: টেস্ট করুন
+--------------------------------
+1. torongo.html + firebase-messaging-sw.js নতুন করে ডিপ্লয় করুন
+2. দুইটা ভিন্ন ব্রাউজারে দুইটা একাউন্টে লগইন করুন, নোটিফিকেশন পারমিশন Allow করুন
+3. একটা ব্রাউজার সম্পূর্ণ বন্ধ করে দিন (শুধু ট্যাব না, পুরো ব্রাউজার)
+4. অন্য একাউন্ট থেকে মেসেজ পাঠান
+5. কিছুক্ষণের মধ্যে বন্ধ থাকা ব্রাউজারের ইউজার একটা OS-লেভেল
+   নোটিফিকেশন দেখতে পাবেন (কম্পিউটার আনলক থাকতে হবে)
+
+সমস্যা হলে যা চেক করবেন
+--------------------------------
+- Firebase Console → Cloud Messaging-এ গিয়ে দেখুন key জেনারেট হয়েছে কিনা
+- Functions ডিপ্লয়ের সময় এরর এলে, Blaze প্ল্যান ঠিকমতো চালু হয়েছে কিনা দেখুন
+- ব্রাউজার কনসোলে (F12) setupPushNotifications সংক্রান্ত এরর আছে কিনা দেখুন
+- Firestore-এ users/{uid} ডকুমেন্টে fcmTokens ফিল্ড তৈরি হয়েছে কিনা যাচাই করুন
+====================================================================
+-->
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>তরঙ্গ — কথা বলুন, খোলা মনে</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&family=Noto+Sans+Bengali:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<!-- Firebase SDKs -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
+
+<style>
+:root{
+  --bg-deep:#081F1D;
+  --bg-panel:#0E2E2B;
+  --bg-panel-2:#123A36;
+  --bg-elevated:#184A44;
+  --accent-wave:#2DD4BF;
+  --accent-wave-dim:#1FA396;
+  --accent-warm:#FF6B5B;
+  --text-cream:#F5F2ED;
+  --text-muted:#8FBBB4;
+  --text-faint:#54807A;
+  --success:#4ADE80;
+  --danger:#FF5A5A;
+  --radius-lg:22px;
+  --radius-md:14px;
+  --radius-sm:10px;
+  --font-display:'Hind Siliguri',sans-serif;
+  --font-body:'Noto Sans Bengali',sans-serif;
+  --font-mono:'JetBrains Mono',monospace;
+  --shadow-sm:0 2px 8px rgba(0,0,0,0.18);
+  --shadow-md:0 10px 30px -8px rgba(0,0,0,0.4);
+  --shadow-lg:0 30px 70px -20px rgba(0,0,0,0.55);
+  --border-soft:1px solid rgba(255,255,255,0.06);
+
+  /* চারটা আলাদা জোনের রঙ — হেডার, চ্যাট-লিস্ট, মেসেজ উইন্ডো, ফুটার */
+  --zone-header:#0A2E2B;
+  --zone-sidebar:#123F3A;
+  --zone-messages:#081E1B;
+  --zone-footer:#0F3B35;
+  --bubble-other:#17493F;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+html,body{height:100%;overscroll-behavior:none;}
+body{
+  font-family:var(--font-body);
+  background:var(--bg-deep);
+  color:var(--text-cream);
+  overflow:hidden;
+  background-image:
+    radial-gradient(circle at 12% 8%, rgba(45,212,191,0.06), transparent 42%),
+    radial-gradient(circle at 92% 85%, rgba(255,107,91,0.04), transparent 42%);
+}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit;transition:opacity .15s, background .15s, transform .15s;}
+button:active{transform:scale(0.97);}
+input,textarea{font-family:inherit;color:inherit;}
+::-webkit-scrollbar{width:6px;height:6px;}
+::-webkit-scrollbar-thumb{background:var(--bg-elevated);border-radius:10px;}
+::selection{background:var(--accent-wave);color:var(--bg-deep);}
+:focus-visible{outline:2px solid var(--accent-wave);outline-offset:2px;}
+@media (prefers-reduced-motion: reduce){
+  *{animation-duration:0.001ms !important;animation-iteration-count:1 !important;transition-duration:0.001ms !important;}
+}
+
+/* ---------- Sonar signature element ---------- */
+.sonar{position:relative;display:inline-flex;}
+.sonar::before,.sonar::after{
+  content:'';position:absolute;inset:0;border-radius:50%;
+  border:2px solid var(--accent-wave);opacity:0;
+  animation:sonarPulse 2.6s ease-out infinite;
+}
+.sonar::after{animation-delay:1.3s;}
+@keyframes sonarPulse{
+  0%{transform:scale(1);opacity:.55;}
+  100%{transform:scale(2.1);opacity:0;}
+}
+.sonar.ring-warm::before,.sonar.ring-warm::after{border-color:var(--accent-warm);}
+
+/* ---------- Auth screens ---------- */
+#authScreen{
+  position:fixed;inset:0;display:flex;align-items:stretch;justify-content:center;
+  z-index:50;background:var(--bg-deep);
+}
+.auth-shell{width:100%;display:flex;max-width:1040px;margin:auto;box-shadow:var(--shadow-lg);border-radius:28px;overflow:hidden;}
+.auth-brand-panel{
+  flex:1.1;background:linear-gradient(160deg,#0A2A27,#0F433E 55%,#0B3430);
+  padding:56px 48px;display:flex;flex-direction:column;justify-content:space-between;
+  position:relative;overflow:hidden;
+}
+.auth-brand-panel::before{
+  content:'';position:absolute;width:520px;height:520px;border-radius:50%;
+  border:1px solid rgba(45,212,191,0.14);top:-160px;right:-180px;
+}
+.auth-brand-panel::after{
+  content:'';position:absolute;width:380px;height:380px;border-radius:50%;
+  border:1px solid rgba(45,212,191,0.1);top:-90px;right:-100px;
+}
+.brand-panel-top{display:flex;align-items:center;gap:14px;position:relative;z-index:2;}
+.brand-panel-quote{position:relative;z-index:2;max-width:340px;}
+.brand-panel-quote h2{font-family:var(--font-display);font-size:27px;font-weight:700;line-height:1.5;margin-bottom:14px;}
+.brand-panel-quote p{color:var(--text-muted);font-size:14px;line-height:1.7;}
+.brand-panel-foot{position:relative;z-index:2;display:flex;gap:26px;}
+.brand-stat b{display:block;font-family:var(--font-display);font-size:21px;font-weight:700;color:var(--accent-wave);}
+.brand-stat span{font-size:12px;color:var(--text-muted);}
+
+.auth-form-panel{
+  flex:1;background:var(--bg-panel);display:flex;align-items:center;justify-content:center;
+  padding:40px;
+}
+.auth-card{width:100%;max-width:360px;}
+.auth-brand{display:flex;align-items:center;gap:14px;margin-bottom:6px;}
+.auth-mark{
+  width:46px;height:46px;border-radius:14px;
+  background:linear-gradient(135deg,var(--accent-wave),var(--accent-wave-dim));
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  box-shadow:0 8px 20px -6px rgba(45,212,191,0.45);
+}
+.auth-mark svg{width:24px;height:24px;}
+.auth-brand h1{font-family:var(--font-display);font-size:24px;font-weight:700;letter-spacing:.3px;}
+.auth-tag{color:var(--text-muted);font-size:13px;margin:6px 0 26px;line-height:1.6;}
+.field{margin-bottom:14px;}
+.field label{display:block;font-size:12px;color:var(--text-muted);margin-bottom:6px;font-weight:500;letter-spacing:.2px;}
+.field input{
+  width:100%;padding:12.5px 14px;background:var(--bg-panel-2);
+  border:1px solid rgba(255,255,255,0.07);border-radius:var(--radius-sm);
+  font-size:14.5px;transition:border-color .2s, background .2s;
+}
+.field input:focus{outline:none;border-color:var(--accent-wave);background:var(--bg-elevated);}
+.btn-primary{
+  width:100%;padding:13px;border-radius:var(--radius-sm);
+  background:var(--accent-wave);color:#06302C;font-weight:600;font-size:14.5px;
+  margin-top:6px;box-shadow:0 10px 24px -8px rgba(45,212,191,0.45);
+  display:flex;align-items:center;justify-content:center;gap:8px;
+}
+.btn-primary:hover{background:#3BE0CA;}
+.btn-primary:disabled{opacity:.55;box-shadow:none;}
+.btn-spinner{width:15px;height:15px;border-radius:50%;border:2px solid rgba(6,48,44,0.3);border-top-color:#06302C;animation:spin .7s linear infinite;display:none;}
+.btn-primary.loading .btn-spinner{display:inline-block;}
+.btn-primary.loading .btn-label{opacity:.85;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.auth-switch{text-align:center;margin-top:20px;font-size:13px;color:var(--text-muted);}
+.auth-switch button{color:var(--accent-wave);font-weight:600;}
+.auth-error{
+  background:rgba(255,90,90,0.1);border:1px solid rgba(255,90,90,0.28);
+  color:#FFAFA6;padding:10px 13px;border-radius:var(--radius-sm);
+  font-size:13px;margin-bottom:14px;display:none;
+}
+@media (max-width:860px){
+  .auth-brand-panel{display:none;}
+  #authScreen{align-items:center;padding:20px;}
+  .auth-shell{border-radius:22px;box-shadow:none;}
+  .auth-form-panel{padding:32px 26px;background:var(--bg-panel);border-radius:22px;box-shadow:var(--shadow-md);}
+}
+
+/* ---------- App shell ---------- */
+#app{
+  position:fixed;inset:0;display:none;
+}
+#app.active{display:flex;}
+.sidebar{
+  width:360px;flex-shrink:0;background:var(--zone-sidebar);
+  display:flex;flex-direction:column;border-right:var(--border-soft);
+}
+.sidebar-header{
+  padding:20px 18px 14px;display:flex;align-items:center;justify-content:space-between;
+  background:var(--zone-header);border-bottom:var(--border-soft);
+}
+.brand-mini{display:flex;align-items:center;gap:10px;}
+.brand-mini .auth-mark{width:34px;height:34px;border-radius:10px;}
+.brand-mini .auth-mark svg{width:18px;height:18px;}
+.brand-mini span{font-family:var(--font-display);font-weight:700;font-size:18px;letter-spacing:.2px;}
+.icon-btn{
+  width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  color:var(--text-muted);transition:background .15s, color .15s;
+}
+.icon-btn:hover{background:var(--bg-panel-2);color:var(--text-cream);}
+.icon-btn svg{width:19px;height:19px;}
+.header-actions{display:flex;gap:4px;}
+
+.search-wrap{padding:0 18px 14px;background:var(--zone-sidebar);}
+.search-box{
+  display:flex;align-items:center;gap:8px;background:rgba(0,0,0,0.18);
+  border-radius:var(--radius-sm);padding:9.5px 13px;border:1px solid transparent;
+  transition:border-color .15s;
+}
+.search-box:focus-within{border-color:var(--accent-wave-dim);}
+.search-box svg{width:16px;height:16px;color:var(--text-faint);flex-shrink:0;}
+.search-box input{background:none;border:none;width:100%;font-size:14px;}
+.search-box input:focus{outline:none;}
+
+.chat-list{flex:1;overflow-y:auto;padding:2px 8px 8px;}
+.chat-item{
+  display:flex;gap:12px;align-items:center;padding:11px 10px;border-radius:var(--radius-md);
+  transition:background .15s;position:relative;
+}
+.chat-item:hover{background:rgba(255,255,255,0.05);}
+.chat-item.active{background:var(--bg-elevated);box-shadow:var(--shadow-sm);}
+.avatar-circle{
+  width:48px;height:48px;border-radius:50%;flex-shrink:0;
+  background:linear-gradient(135deg,var(--accent-wave-dim),var(--bg-elevated));
+  display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px;
+  color:#fff;position:relative;box-shadow:var(--shadow-sm);
+}
+.presence-dot{
+  width:11px;height:11px;border-radius:50%;background:var(--success);
+  position:absolute;bottom:0;right:0;border:2.5px solid var(--zone-sidebar);
+  box-shadow:0 0 0 2px rgba(74,222,128,0.15);
+}
+.chat-item.active .presence-dot{border-color:var(--bg-elevated);}
+.chat-meta{flex:1;min-width:0;text-align:right;}
+.chat-info{flex:1;min-width:0;}
+.chat-name{font-weight:600;font-size:15px;margin-bottom:2px;}
+.chat-preview{font-size:13px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px;}
+.chat-time{font-size:11px;color:var(--text-faint);margin-bottom:5px;font-family:var(--font-mono);}
+.unread-badge{
+  background:var(--accent-warm);color:#fff;font-size:11px;font-weight:700;
+  border-radius:10px;padding:2px 7px;display:inline-block;box-shadow:0 3px 10px -3px rgba(255,107,91,0.6);
+}
+.empty-hint{color:var(--text-faint);font-size:13px;text-align:center;padding:40px 20px;line-height:1.7;}
+
+.sidebar-footer{
+  padding:13px 14px;border-top:var(--border-soft);display:flex;align-items:center;gap:10px;
+  cursor:pointer;transition:background .15s;background:var(--zone-footer);
+}
+.sidebar-footer:hover{background:var(--bg-elevated);}
+.my-name{font-weight:600;font-size:14px;}
+.my-status{font-size:12px;color:var(--text-muted);}
+
+/* ---------- Chat area ---------- */
+.chat-area{flex:1;display:flex;flex-direction:column;background:var(--zone-messages);min-width:0;}
+.chat-area-empty{
+  flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  color:var(--text-faint);gap:16px;background:var(--zone-messages);
+}
+.chat-area-empty svg{width:64px;height:64px;opacity:.3;}
+.chat-header{
+  padding:15px 22px;display:flex;align-items:center;gap:12px;
+  border-bottom:var(--border-soft);flex-shrink:0;box-shadow:var(--shadow-sm);position:relative;z-index:2;
+  background:var(--zone-header);
+}
+.back-btn{display:none;}
+.chat-header .chat-info{cursor:pointer;}
+.chat-header .chat-name{font-size:15.5px;}
+.chat-header .chat-sub{font-size:12.5px;color:var(--text-muted);}
+.chat-header-actions{margin-right:auto;order:99;display:flex;gap:2px;}
+
+.messages{flex:1;overflow-y:auto;padding:24px 26px;display:flex;flex-direction:column;gap:3px;}
+.msg-row{display:flex;max-width:66%;}
+.msg-row.me{align-self:flex-end;flex-direction:row-reverse;}
+.msg-bubble{
+  padding:10px 15px;border-radius:18px;font-size:14.5px;line-height:1.55;
+  background:var(--bubble-other);position:relative;word-wrap:break-word;box-shadow:var(--shadow-sm);
+}
+.msg-row.me .msg-bubble{background:var(--accent-wave-dim);color:#EAFBF8;border-bottom-right-radius:5px;}
+.msg-row:not(.me) .msg-bubble{border-bottom-left-radius:5px;}
+.msg-row+.msg-row{margin-top:2px;}
+.msg-time{font-size:10px;color:var(--text-faint);font-family:var(--font-mono);margin-top:4px;display:block;text-align:right;}
+.msg-row:not(.me) .msg-time{text-align:left;}
+.msg-img{max-width:240px;border-radius:12px;display:block;margin-bottom:4px;box-shadow:var(--shadow-sm);}
+.day-divider{
+  text-align:center;font-size:11px;color:var(--text-faint);margin:18px 0 10px;
+  font-family:var(--font-mono);letter-spacing:.6px;text-transform:uppercase;
+}
+.typing-indicator{display:flex;gap:4px;padding:10px 15px;background:var(--bubble-other);border-radius:18px;width:fit-content;box-shadow:var(--shadow-sm);}
+.typing-indicator span{width:6px;height:6px;background:var(--text-muted);border-radius:50%;animation:typingBounce 1.2s infinite;}
+.typing-indicator span:nth-child(2){animation-delay:.2s;}
+.typing-indicator span:nth-child(3){animation-delay:.4s;}
+@keyframes typingBounce{0%,60%,100%{transform:translateY(0);opacity:.5;}30%{transform:translateY(-5px);opacity:1;}}
+
+.composer{
+  padding:16px 22px;display:flex;align-items:flex-end;gap:10px;
+  border-top:var(--border-soft);flex-shrink:0;background:var(--zone-footer);
+}
+.composer-input{
+  flex:1;background:var(--bg-elevated);border-radius:22px;padding:11.5px 17px;
+  max-height:120px;font-size:14.5px;resize:none;border:1px solid transparent;transition:border-color .15s;
+}
+.composer-input:focus{outline:none;border-color:var(--accent-wave-dim);}
+.send-btn{
+  width:43px;height:43px;border-radius:50%;background:var(--accent-wave);
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#06302C;
+  transition:transform .15s, background .15s;box-shadow:0 8px 20px -8px rgba(45,212,191,0.5);
+}
+.send-btn:hover{background:#3BE0CA;}
+.send-btn:active{transform:scale(.92);}
+.send-btn svg{width:19px;height:19px;}
+.attach-btn{width:42px;height:42px;flex-shrink:0;}
+
+/* ---------- Modals ---------- */
+.modal-overlay{
+  position:fixed;inset:0;background:rgba(4,16,14,0.78);backdrop-filter:blur(5px);
+  display:none;align-items:center;justify-content:center;z-index:80;padding:20px;
+}
+.modal-overlay.active{display:flex;animation:overlayFade .18s ease;}
+@keyframes overlayFade{from{opacity:0;}to{opacity:1;}}
+.modal-box{
+  width:100%;max-width:400px;background:var(--bg-panel);border-radius:var(--radius-lg);
+  padding:26px;border:1px solid rgba(45,212,191,0.14);max-height:85vh;overflow-y:auto;
+  box-shadow:var(--shadow-lg);animation:modalPop .22s cubic-bezier(.2,.9,.3,1.2);
+}
+@keyframes modalPop{from{opacity:0;transform:translateY(10px) scale(.97);}to{opacity:1;transform:translateY(0) scale(1);}}
+.modal-title{font-family:var(--font-display);font-size:19px;font-weight:700;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;}
+.profile-avatar-big{width:88px;height:88px;font-size:30px;margin:0 auto 16px;}
+.settings-row{
+  display:flex;justify-content:space-between;align-items:center;padding:14px 0;
+  border-bottom:var(--border-soft);
+}
+.settings-row:last-child{border-bottom:none;}
+.settings-label{font-size:14.5px;}
+.settings-sub{font-size:12px;color:var(--text-muted);margin-top:2px;}
+.toggle{
+  width:44px;height:25px;border-radius:14px;background:var(--bg-elevated);position:relative;transition:background .2s;flex-shrink:0;
+}
+.toggle.on{background:var(--accent-wave);}
+.toggle::after{
+  content:'';position:absolute;width:19px;height:19px;border-radius:50%;background:#fff;
+  top:3px;left:3px;transition:transform .2s;
+}
+.toggle.on::after{transform:translateX(19px);}
+.danger-btn{color:var(--danger);font-size:14.5px;font-weight:600;padding:12px 0;width:100%;text-align:left;}
+.new-chat-list{max-height:340px;overflow-y:auto;margin-top:6px;}
+.new-chat-list .chat-item{padding:9px 8px;}
+
+/* ---------- Call overlay ---------- */
+#callOverlay{
+  position:fixed;inset:0;background:linear-gradient(160deg,#062822,#0B3D3A 60%);
+  display:none;flex-direction:column;align-items:center;justify-content:center;z-index:90;color:#fff;
+}
+#callOverlay.active{display:flex;}
+.call-avatar-wrap{margin-bottom:22px;}
+.call-avatar-wrap .avatar-circle{width:110px;height:110px;font-size:38px;}
+.call-name{font-family:var(--font-display);font-size:22px;font-weight:700;}
+.call-status{color:var(--text-muted);font-size:14px;margin-top:6px;font-family:var(--font-mono);}
+.call-controls{display:flex;gap:22px;margin-top:50px;}
+.call-btn{
+  width:58px;height:58px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  background:rgba(255,255,255,0.1);
+}
+.call-btn.end{background:var(--danger);}
+.call-btn.accept{background:var(--success);}
+.call-btn.active-toggle{background:var(--accent-wave);color:#06302C;}
+.call-btn svg{width:24px;height:24px;}
+.call-videos{position:absolute;inset:0;}
+.call-videos.audio-only{position:absolute;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none;}
+#remoteVideo{width:100%;height:100%;object-fit:cover;background:#000;}
+.unmute-banner{
+  display:none;position:absolute;top:24px;left:50%;transform:translateX(-50%);
+  background:var(--accent-warm);color:#fff;padding:10px 18px;border-radius:30px;
+  font-size:13.5px;font-weight:600;z-index:5;box-shadow:var(--shadow-md);cursor:pointer;
+}
+.unmute-banner.show{display:block;}
+#localVideo{
+  position:absolute;bottom:110px;right:20px;width:110px;height:150px;border-radius:14px;
+  object-fit:cover;border:2px solid var(--accent-wave);background:#000;
+}
+
+/* ---------- Toast ---------- */
+#toast{
+  position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(100px);
+  background:var(--bg-elevated);padding:11px 20px;border-radius:12px;font-size:13.5px;
+  z-index:200;transition:transform .3s;box-shadow:0 10px 30px rgba(0,0,0,0.3);
+}
+#toast.show{transform:translateX(-50%) translateY(0);}
+
+/* ---------- Mobile ---------- */
+@media (max-width:768px){
+  .sidebar{width:100%;position:absolute;inset:0;z-index:5;}
+  .chat-area{position:absolute;inset:0;z-index:6;transform:translateX(100%);transition:transform .28s ease;}
+  .chat-area.mobile-active{transform:translateX(0);}
+  #app.active{display:block;position:fixed;}
+  .back-btn{display:flex !important;}
+  .msg-row{max-width:82%;}
+  #localVideo{width:80px;height:110px;bottom:130px;right:14px;}
+}
+@media (min-width:769px){
+  .chat-area-empty{display:flex;}
+}
+</style>
+</head>
+<body>
+
+<!-- ================= AUTH ================= -->
+<div id="authScreen">
+  <div class="auth-shell">
+    <div class="auth-brand-panel">
+      <div class="brand-panel-top">
+        <div class="auth-mark sonar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#06302C" stroke-width="2.2"><path d="M4 12c0-4.4 3.6-8 8-8s8 3.6 8 8-3.6 8-8 8H6l-2 2v-4.5C2.7 16 4 14.1 4 12z"/></svg>
+        </div>
+        <span style="font-family:var(--font-display);font-weight:700;font-size:19px;">তরঙ্গ</span>
+      </div>
+      <div class="brand-panel-quote">
+        <h2>প্রতিটা কথোপকথন একটা তরঙ্গ — শুরু করুন খোলা মনে।</h2>
+        <p>রিয়েল-টাইম মেসেজিং, ভয়েস ও ভিডিও কল — সব একসাথে, দ্রুত ও নিরবচ্ছিন্নভাবে। আপনার কথা পৌঁছাক ঠিক সময়ে, ঠিক মানুষের কাছে।</p>
+      </div>
+      <div class="brand-panel-foot">
+        <div class="brand-stat"><b>রিয়েল-টাইম</b><span>ইনস্ট্যান্ট মেসেজ সিঙ্ক</span></div>
+        <div class="brand-stat"><b>HD কল</b><span>ভয়েস ও ভিডিও</span></div>
+        <div class="brand-stat"><b>নিরাপদ</b><span>Firebase অথেন্টিকেশন</span></div>
+      </div>
+    </div>
+
+    <div class="auth-form-panel">
+    <div class="auth-card">
+    <div id="authError" class="auth-error"></div>
+
+    <!-- LOGIN -->
+    <div id="loginPane">
+      <div class="auth-brand">
+        <div class="auth-mark sonar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#06302C" stroke-width="2.2"><path d="M4 12c0-4.4 3.6-8 8-8s8 3.6 8 8-3.6 8-8 8H6l-2 2v-4.5C2.7 16 4 14.1 4 12z"/></svg>
+        </div>
+        <h1>তরঙ্গ</h1>
+      </div>
+      <p class="auth-tag">আপনার একাউন্টে ফিরে আসুন।</p>
+      <div class="field"><label>ইমেইল</label><input type="email" id="loginEmail" placeholder="you@example.com"></div>
+      <div class="field"><label>পাসওয়ার্ড</label><input type="password" id="loginPass" placeholder="••••••••"></div>
+      <button class="btn-primary" id="loginBtn"><span class="btn-spinner"></span><span class="btn-label">লগইন করুন</span></button>
+      <div class="auth-switch">অ্যাকাউন্ট নেই? <button id="toRegister">রেজিস্টার করুন</button></div>
+    </div>
+
+    <!-- REGISTER -->
+    <div id="registerPane" style="display:none;">
+      <div class="auth-brand">
+        <div class="auth-mark sonar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#06302C" stroke-width="2.2"><path d="M4 12c0-4.4 3.6-8 8-8s8 3.6 8 8-3.6 8-8 8H6l-2 2v-4.5C2.7 16 4 14.1 4 12z"/></svg>
+        </div>
+        <h1>তরঙ্গ</h1>
+      </div>
+      <p class="auth-tag">নতুন অ্যাকাউন্ট খুলুন, কয়েক সেকেন্ডেই।</p>
+      <div class="field"><label>নাম</label><input type="text" id="regName" placeholder="আপনার নাম"></div>
+      <div class="field"><label>মোবাইল নাম্বার</label><input type="tel" id="regPhone" placeholder="01XXXXXXXXX"></div>
+      <div class="field"><label>ইমেইল</label><input type="email" id="regEmail" placeholder="you@example.com"></div>
+      <div class="field"><label>পাসওয়ার্ড</label><input type="password" id="regPass" placeholder="কমপক্ষে ৬ ডিজিট"></div>
+      <button class="btn-primary" id="registerBtn"><span class="btn-spinner"></span><span class="btn-label">অ্যাকাউন্ট তৈরি করুন</span></button>
+      <div class="auth-switch">অ্যাকাউন্ট আছে? <button id="toLogin">লগইন করুন</button></div>
+    </div>
+    </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= APP SHELL ================= -->
+<div id="app">
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div class="brand-mini">
+        <div class="auth-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#06302C" stroke-width="2.2"><path d="M4 12c0-4.4 3.6-8 8-8s8 3.6 8 8-3.6 8-8 8H6l-2 2v-4.5C2.7 16 4 14.1 4 12z"/></svg></div>
+        <span>তরঙ্গ</span>
+      </div>
+      <div class="header-actions">
+        <button class="icon-btn" id="newChatBtn" title="নতুন চ্যাট">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button class="icon-btn" id="settingsBtn" title="সেটিংস">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="search-wrap">
+      <div class="search-box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+        <input type="text" id="chatSearch" placeholder="খুঁজুন...">
+      </div>
+    </div>
+    <div class="chat-list" id="chatList">
+      <div class="empty-hint">এখনো কোনো চ্যাট নেই।<br>উপরে + বাটনে চেপে নতুন কথোপকথন শুরু করুন।</div>
+    </div>
+    <div class="sidebar-footer" id="myProfileBtn">
+      <div class="avatar-circle" id="myAvatar">?</div>
+      <div style="flex:1;">
+        <div class="my-name" id="myName">...</div>
+        <div class="my-status" id="myStatusText">অনলাইন</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="chat-area" id="chatArea">
+    <div class="chat-area-empty" id="chatEmptyState">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 12c0-4.4 3.6-8 8-8s8 3.6 8 8-3.6 8-8 8H6l-2 2v-4.5C2.7 16 4 14.1 4 12z"/></svg>
+      <div>বাঁ পাশ থেকে একটা চ্যাট বেছে নিন</div>
+    </div>
+    <div id="activeChatView" style="display:none;flex-direction:column;height:100%;">
+      <div class="chat-header">
+        <button class="icon-btn back-btn" id="backBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        </button>
+        <div class="avatar-circle" id="headerAvatar">?</div>
+        <div class="chat-info" id="headerInfo">
+          <div class="chat-name" id="headerName">...</div>
+          <div class="chat-sub" id="headerSub">অফলাইন</div>
+        </div>
+        <div class="chat-header-actions">
+          <button class="icon-btn" id="voiceCallBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.8 19.8 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.8 19.8 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.13.96.36 1.9.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0122 16.92z"/></svg>
+          </button>
+          <button class="icon-btn" id="videoCallBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="messages" id="messagesEl"></div>
+      <div class="composer">
+        <button class="icon-btn attach-btn" id="attachBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+        </button>
+        <input type="file" id="imageInput" accept="image/*" style="display:none;">
+        <textarea class="composer-input" id="msgInput" rows="1" placeholder="মেসেজ লিখুন..."></textarea>
+        <button class="send-btn" id="sendBtn">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= NEW CHAT MODAL ================= -->
+<div class="modal-overlay" id="newChatModal">
+  <div class="modal-box">
+    <div class="modal-title">নতুন কথোপকথন <button class="icon-btn" data-close="newChatModal">✕</button></div>
+    <div class="search-box" style="margin-bottom:4px;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+      <input type="text" id="userSearchInput" placeholder="ইমেইল বা মোবাইল নাম্বার দিয়ে খুঁজুন...">
+    </div>
+    <div class="new-chat-list" id="userSearchResults"></div>
+  </div>
+</div>
+
+<!-- ================= PROFILE MODAL ================= -->
+<div class="modal-overlay" id="profileModal">
+  <div class="modal-box">
+    <div class="modal-title">প্রোফাইল <button class="icon-btn" data-close="profileModal">✕</button></div>
+    <div class="avatar-circle profile-avatar-big" id="profileAvatarBig">?</div>
+    <div class="field"><label>নাম</label><input type="text" id="profileNameInput"></div>
+    <div class="field"><label>মোবাইল নাম্বার</label><input type="tel" id="profilePhoneInput" placeholder="01XXXXXXXXX"></div>
+    <div class="field"><label>স্ট্যাটাস মেসেজ</label><input type="text" id="profileStatusInput" placeholder="যেমনঃ ব্যস্ত আছি"></div>
+    <button class="btn-primary" id="saveProfileBtn">সংরক্ষণ করুন</button>
+  </div>
+</div>
+
+<!-- ================= SETTINGS MODAL ================= -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal-box">
+    <div class="modal-title">সেটিংস <button class="icon-btn" data-close="settingsModal">✕</button></div>
+    <div class="settings-row">
+      <div><div class="settings-label">ডার্ক থিম</div><div class="settings-sub">চোখের আরামের জন্য গাঢ় রং</div></div>
+      <div class="toggle on" id="darkToggle"></div>
+    </div>
+    <div class="settings-row">
+      <div><div class="settings-label">ডেস্কটপ নোটিফিকেশন</div><div class="settings-sub">নতুন মেসেজ এলে ব্রাউজার নোটিফিকেশন দেখাবে</div></div>
+      <div class="toggle on" id="notifToggle"></div>
+    </div>
+    <div class="settings-row">
+      <div><div class="settings-label">নোটিফিকেশন শব্দ</div><div class="settings-sub">নতুন মেসেজে শব্দ বাজবে</div></div>
+      <div class="toggle on" id="soundToggle"></div>
+    </div>
+    <div class="settings-row">
+      <div><div class="settings-label">অনলাইন স্ট্যাটাস দেখান</div><div class="settings-sub">অন্যরা দেখতে পাবে আপনি অনলাইন কিনা</div></div>
+      <div class="toggle on" id="presenceToggle"></div>
+    </div>
+    <button class="danger-btn" id="logoutBtn">লগআউট করুন</button>
+  </div>
+</div>
+
+<!-- ================= CALL OVERLAY ================= -->
+<div id="callOverlay">
+  <div class="call-videos" id="callVideos">
+    <video id="remoteVideo" autoplay playsinline></video>
+    <video id="localVideo" autoplay playsinline muted></video>
+  </div>
+  <div class="unmute-banner" id="unmuteBanner">🔊 শব্দ চালু করতে ট্যাপ করুন</div>
+  <div class="call-avatar-wrap sonar ring-warm"><div class="avatar-circle" id="callAvatar">?</div></div>
+  <div class="call-name" id="callName">...</div>
+  <div class="call-status" id="callStatus">রিং হচ্ছে...</div>
+  <div class="call-controls" id="callControls"></div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* =========================================================
+   ⚠️ ফায়ারবেস কনফিগ — নিজের Firebase প্রজেক্টের কনফিগ বসান
+   Firebase Console → Project Settings → General → Your apps
+   Firestore ও Authentication (Email/Password) চালু রাখুন
+   (ছবি Firestore-এই base64 আকারে সেভ হয়, তাই Storage/Blaze প্ল্যান লাগবে না)
+   ব্রাউজার/ট্যাব বন্ধ থাকা অবস্থায়ও পুশ নোটিফিকেশনের জন্য FCM ব্যবহার হচ্ছে —
+   Firebase Console → Project Settings → Cloud Messaging → Web configuration →
+   "Generate key pair" থেকে VAPID key নিয়ে নিচে বসান
+========================================================= */
+const VAPID_KEY = "YOUR_VAPID_KEY";
+const firebaseConfig = {
+  apiKey: "AIzaSyAg4GSe_nef9EF6oMdYDfxrbYgJDyfCGKE",
+  authDomain: "torongo-59fce.firebaseapp.com",
+  projectId: "torongo-59fce",
+  storageBucket: "torongo-59fce.firebasestorage.app",
+  messagingSenderId: "238250778342",
+  appId: "1:238250778342:web:87fed81008a8a47bbb6527"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+let messaging = null;
+try{ if(firebase.messaging.isSupported()) messaging = firebase.messaging(); }catch(e){}
+
+let currentUser = null;
+let currentUserData = null;
+let activeChatId = null;
+let activeChatPeer = null;
+let chatListeners = {};
+let messagesUnsub = null;
+let typingTimeout = null;
+let peerConnection = null;
+let localStream = null;
+let currentCallId = null;
+let callUnsub = null;
+let isCaller = false;
+
+const $ = id => document.getElementById(id);
+const escapeHtml = s => (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const initials = name => (name||'?').trim().charAt(0).toUpperCase();
+
+const AVATAR_PALETTES = [
+  ['#2DD4BF','#0F766E'], ['#FF6B5B','#B3392E'], ['#F5A623','#9C6A0E'],
+  ['#818CF8','#4338CA'], ['#F472B6','#9D174D'], ['#4ADE80','#15803D'],
+  ['#38BDF8','#0369A1'], ['#C084FC','#6B21A8']
+];
+function avatarStyle(name){
+  const str = name || '?';
+  let hash = 0;
+  for(let i=0;i<str.length;i++){ hash = str.charCodeAt(i) + ((hash<<5)-hash); }
+  const [c1,c2] = AVATAR_PALETTES[Math.abs(hash) % AVATAR_PALETTES.length];
+  return `background:linear-gradient(135deg,${c1},${c2});`;
+}
+
+function toast(msg){
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2600);
+}
+
+/* ---------------- Notification sound (Web Audio, no external file needed) ---------------- */
+let audioCtx = null;
+function playNotificationSound(){
+  if(!$('soundToggle').classList.contains('on')) return;
+  try{
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const now = audioCtx.currentTime;
+    [880, 1320].forEach((freq, i) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, now + i*0.11);
+      gain.gain.exponentialRampToValueAtTime(0.18, now + i*0.11 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + i*0.11 + 0.22);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(now + i*0.11);
+      osc.stop(now + i*0.11 + 0.24);
+    });
+  }catch(e){}
+}
+
+const chatsCache = {}; // chatId -> {uid, name, ...peer}
+const lastSeenAt = {};  // chatId -> millis, to detect genuinely-new messages
+let chatsInitialized = false;
+
+function notifyNewMessage(chatId, peer, text){
+  // তরঙ্গ ট্যাব খোলা ও ফোকাসে থাকা অবস্থায়: শব্দ + ইন-অ্যাপ টোস্ট
+  // ট্যাব হাইড/মিনিমাইজড বা ব্রাউজার বন্ধ থাকলে: FCM + service worker আলাদাভাবে OS নোটিফিকেশন দেখাবে
+  playNotificationSound();
+  if(document.hidden || activeChatId !== chatId){
+    toast(`${peer.name}: ${text || 'নতুন মেসেজ'}`);
+  }
+}
+
+/* ---------------- AUTH ---------------- */
+$('toRegister').onclick = () => { $('loginPane').style.display='none'; $('registerPane').style.display='block'; $('authError').style.display='none'; };
+$('toLogin').onclick = () => { $('registerPane').style.display='none'; $('loginPane').style.display='block'; $('authError').style.display='none'; };
+
+function showAuthError(msg){
+  const e = $('authError');
+  e.textContent = msg;
+  e.style.display = 'block';
+}
+
+function setBtnLoading(btn, loading){
+  btn.disabled = loading;
+  btn.classList.toggle('loading', loading);
+}
+
+$('registerBtn').onclick = async () => {
+  const name = $('regName').value.trim();
+  const phone = $('regPhone').value.trim();
+  const email = $('regEmail').value.trim();
+  const pass = $('regPass').value;
+  if(!name || !email || pass.length < 6){ showAuthError('নাম, ইমেইল ও কমপক্ষে ৬ ডিজিটের পাসওয়ার্ড দিন।'); return; }
+  if(!phone || !/^[0-9+\-\s]{7,15}$/.test(phone)){ showAuthError('সঠিক মোবাইল নাম্বার দিন।'); return; }
+  setBtnLoading($('registerBtn'), true);
+  try{
+    const cred = await auth.createUserWithEmailAndPassword(email, pass);
+    await db.collection('users').doc(cred.user.uid).set({
+      name, email, emailLower: email.toLowerCase(), phone,
+      status: 'হাই! আমি তরঙ্গে আছি',
+      online: true, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  }catch(err){
+    showAuthError(translateAuthError(err.code));
+  }
+  setBtnLoading($('registerBtn'), false);
+};
+
+$('loginBtn').onclick = async () => {
+  const email = $('loginEmail').value.trim();
+  const pass = $('loginPass').value;
+  if(!email || !pass){ showAuthError('ইমেইল ও পাসওয়ার্ড দিন।'); return; }
+  setBtnLoading($('loginBtn'), true);
+  try{
+    await auth.signInWithEmailAndPassword(email, pass);
+  }catch(err){
+    showAuthError(translateAuthError(err.code));
+  }
+  setBtnLoading($('loginBtn'), false);
+};
+
+function translateAuthError(code){
+  const map = {
+    'auth/email-already-in-use':'এই ইমেইল দিয়ে আগেই অ্যাকাউন্ট আছে।',
+    'auth/invalid-email':'ইমেইল ঠিকানাটি সঠিক নয়।',
+    'auth/weak-password':'পাসওয়ার্ড খুব দুর্বল, কমপক্ষে ৬ ডিজিট দিন।',
+    'auth/user-not-found':'এই ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি।',
+    'auth/wrong-password':'পাসওয়ার্ড ভুল হয়েছে।',
+    'auth/invalid-credential':'ইমেইল অথবা পাসওয়ার্ড ভুল।'
+  };
+  return map[code] || 'কিছু একটা সমস্যা হয়েছে, আবার চেষ্টা করুন।';
+}
+
+$('logoutBtn').onclick = async () => {
+  if(currentUser){ await db.collection('users').doc(currentUser.uid).update({online:false}).catch(()=>{}); }
+  await auth.signOut();
+  closeModal('settingsModal');
+};
+
+auth.onAuthStateChanged(async user => {
+  if(user){
+    currentUser = user;
+    const doc = await db.collection('users').doc(user.uid).get();
+    currentUserData = doc.data() || {};
+    $('myName').textContent = currentUserData.name || 'ব্যবহারকারী';
+    $('myAvatar').textContent = initials(currentUserData.name);
+    $('myAvatar').style.cssText = avatarStyle(currentUserData.name);
+    await db.collection('users').doc(user.uid).update({online:true}).catch(()=>{});
+    $('authScreen').style.display = 'none';
+    $('app').classList.add('active');
+    if('Notification' in window && Notification.permission === 'default'){
+      Notification.requestPermission().catch(()=>{});
+    }
+    setupPushNotifications();
+    loadChats();
+    listenForIncomingCalls();
+    window.addEventListener('beforeunload', ()=>{
+      db.collection('users').doc(user.uid).update({online:false}).catch(()=>{});
+    });
+  }else{
+    currentUser = null;
+    $('authScreen').style.display = 'flex';
+    $('app').classList.remove('active');
+  }
+});
+
+/* ---------------- CHAT LIST ---------------- */
+function chatIdFor(uidA, uidB){ return [uidA, uidB].sort().join('_'); }
+
+function loadChats(){
+  db.collection('chats').where('participants','array-contains', currentUser.uid)
+    .onSnapshot(snap => {
+      const list = $('chatList');
+      if(snap.empty){
+        list.innerHTML = '<div class="empty-hint">এখনো কোনো চ্যাট নেই।<br>উপরে + বাটনে চেপে নতুন কথোপকথন শুরু করুন।</div>';
+        chatsInitialized = true;
+        return;
+      }
+      let rows = [];
+      snap.forEach(d => {
+        const c = d.data();
+        const peerId = c.participants.find(p => p !== currentUser.uid);
+        rows.push({id:d.id, ...c, peerId});
+      });
+      rows.sort((a,b) => (b.lastAt?.toMillis?.()||0) - (a.lastAt?.toMillis?.()||0));
+      renderChatList(rows);
+    });
+}
+
+async function renderChatList(rows){
+  const list = $('chatList');
+  list.innerHTML = '';
+  for(const c of rows){
+    const peerDoc = await db.collection('users').doc(c.peerId).get();
+    const peer = peerDoc.data() || {name:'ব্যবহারকারী'};
+    chatsCache[c.id] = {uid:c.peerId, ...peer};
+
+    const thisLastAt = c.lastAt?.toMillis?.() || 0;
+    const prevLastAt = lastSeenAt[c.id];
+    if(chatsInitialized && prevLastAt !== undefined && thisLastAt > prevLastAt && c.lastSenderId && c.lastSenderId !== currentUser.uid){
+      const alreadyViewing = (activeChatId === c.id) && !document.hidden;
+      if(!alreadyViewing) notifyNewMessage(c.id, chatsCache[c.id], c.lastMessage);
+    }
+    lastSeenAt[c.id] = thisLastAt;
+
+    const div = document.createElement('div');
+    div.className = 'chat-item' + (c.id === activeChatId ? ' active' : '');
+    div.innerHTML = `
+      <div class="avatar-circle" style="${avatarStyle(peer.name)}">${initials(peer.name)}${peer.online?'<span class="presence-dot"></span>':''}</div>
+      <div class="chat-info">
+        <div class="chat-name">${escapeHtml(peer.name)}</div>
+        <div class="chat-preview">${escapeHtml(c.lastMessage || 'কথোপকথন শুরু করুন')}</div>
+      </div>
+      <div class="chat-meta">
+        <div class="chat-time">${formatTime(c.lastAt)}</div>
+        ${(c.unread && c.unread[currentUser.uid]) ? `<span class="unread-badge">${c.unread[currentUser.uid]}</span>` : ''}
+      </div>`;
+    div.onclick = () => openChat(c.id, {uid:c.peerId, ...peer});
+    list.appendChild(div);
+  }
+  chatsInitialized = true;
+}
+
+function formatTime(ts){
+  if(!ts || !ts.toDate) return '';
+  const d = ts.toDate();
+  const now = new Date();
+  if(d.toDateString() === now.toDateString()) return d.toLocaleTimeString('bn-BD',{hour:'2-digit',minute:'2-digit'});
+  return d.toLocaleDateString('bn-BD',{day:'numeric',month:'short'});
+}
+
+/* ---------------- OPEN CHAT / MESSAGES ---------------- */
+function openChat(chatId, peer){
+  activeChatId = chatId;
+  activeChatPeer = peer;
+  $('chatEmptyState').style.display = 'none';
+  $('activeChatView').style.display = 'flex';
+  $('headerName').textContent = peer.name;
+  $('headerAvatar').textContent = initials(peer.name);
+  $('headerAvatar').style.cssText = avatarStyle(peer.name);
+  $('headerSub').textContent = peer.online ? 'অনলাইন' : 'অফলাইন';
+  if(window.innerWidth <= 768){ $('chatArea').classList.add('mobile-active'); }
+
+  db.collection('chats').doc(chatId).set({unread:{[currentUser.uid]:0}}, {merge:true}).catch(()=>{});
+
+  if(messagesUnsub) messagesUnsub();
+  const msgsEl = $('messagesEl');
+  msgsEl.innerHTML = '';
+  let lastDay = null;
+  messagesUnsub = db.collection('chats').doc(chatId).collection('messages')
+    .orderBy('createdAt','asc').limitToLast(200)
+    .onSnapshot(snap => {
+      msgsEl.innerHTML = '';
+      lastDay = null;
+      snap.forEach(docSnap => {
+        const m = docSnap.data();
+        if(!m.createdAt) return;
+        const day = m.createdAt.toDate().toDateString();
+        if(day !== lastDay){
+          lastDay = day;
+          const div = document.createElement('div');
+          div.className = 'day-divider';
+          div.textContent = m.createdAt.toDate().toLocaleDateString('bn-BD',{day:'numeric',month:'long'});
+          msgsEl.appendChild(div);
+        }
+        const row = document.createElement('div');
+        row.className = 'msg-row' + (m.senderId === currentUser.uid ? ' me' : '');
+        let inner = '';
+        if(m.imageData || m.imageUrl) inner += `<img src="${m.imageData || m.imageUrl}" class="msg-img">`;
+        if(m.text) inner += escapeHtml(m.text);
+        row.innerHTML = `<div class="msg-bubble">${inner}<span class="msg-time">${m.createdAt.toDate().toLocaleTimeString('bn-BD',{hour:'2-digit',minute:'2-digit'})}</span></div>`;
+        msgsEl.appendChild(row);
+      });
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+    });
+}
+
+$('backBtn').onclick = () => {
+  $('chatArea').classList.remove('mobile-active');
+};
+
+async function sendMessage(){
+  const input = $('msgInput');
+  const text = input.value.trim();
+  if(!text || !activeChatId) return;
+  input.value = '';
+  autoGrow(input);
+  const chatRef = db.collection('chats').doc(activeChatId);
+  await chatRef.set({
+    participants:[currentUser.uid, activeChatPeer.uid],
+    lastMessage: text, lastSenderId: currentUser.uid, lastAt: firebase.firestore.FieldValue.serverTimestamp(),
+    unread: {[activeChatPeer.uid]: firebase.firestore.FieldValue.increment(1)}
+  }, {merge:true});
+  await chatRef.collection('messages').add({
+    text, senderId: currentUser.uid, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+}
+$('sendBtn').onclick = sendMessage;
+$('msgInput').addEventListener('keydown', e => {
+  if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }
+});
+function autoGrow(el){ el.style.height='auto'; el.style.height = Math.min(el.scrollHeight,120)+'px'; }
+$('msgInput').addEventListener('input', e => autoGrow(e.target));
+
+$('attachBtn').onclick = () => $('imageInput').click();
+
+// ছবি রিসাইজ করে ছোট ও কম-কোয়ালিটি base64-এ রূপান্তর, যাতে Firestore ডকুমেন্টে (~1MB সীমা) ধরে যায়
+function resizeImageToBase64(file, maxDim = 720, quality = 0.55){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('read failed'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('image load failed'));
+      img.onload = () => {
+        let { width, height } = img;
+        if(width > maxDim || height > maxDim){
+          const scale = maxDim / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+$('imageInput').onchange = async (e) => {
+  const file = e.target.files[0];
+  if(!file || !activeChatId) return;
+  if(!file.type.startsWith('image/')){ toast('শুধু ছবি ফাইল পাঠানো যাবে।'); e.target.value=''; return; }
+  toast('ছবি পাঠানো হচ্ছে...');
+  try{
+    let dataUrl = await resizeImageToBase64(file);
+    // এখনও বড় হলে আরও কম্প্রেস করার চেষ্টা (Firestore ডকুমেন্ট সীমার নিচে রাখতে)
+    if(dataUrl.length > 700000){ dataUrl = await resizeImageToBase64(file, 480, 0.4); }
+    if(dataUrl.length > 900000){ toast('ছবিটা অনেক বড়, ছোট সাইজের ছবি চেষ্টা করুন।'); e.target.value=''; return; }
+
+    const chatRef = db.collection('chats').doc(activeChatId);
+    await chatRef.set({
+      participants:[currentUser.uid, activeChatPeer.uid],
+      lastMessage:'📷 ছবি', lastSenderId: currentUser.uid, lastAt: firebase.firestore.FieldValue.serverTimestamp(),
+      unread:{[activeChatPeer.uid]: firebase.firestore.FieldValue.increment(1)}
+    }, {merge:true});
+    await chatRef.collection('messages').add({
+      imageData: dataUrl, senderId:currentUser.uid, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  }catch(err){ toast('ছবি পাঠাতে সমস্যা হয়েছে।'); }
+  e.target.value = '';
+};
+
+/* ---------------- NEW CHAT / USER SEARCH ---------------- */
+$('newChatBtn').onclick = () => openModal('newChatModal');
+$('userSearchInput').addEventListener('input', async (e) => {
+  const raw = e.target.value.trim();
+  const q = raw.toLowerCase();
+  const results = $('userSearchResults');
+  if(q.length < 2){ results.innerHTML = ''; return; }
+  const seen = new Set();
+  const docs = [];
+  const emailSnap = await db.collection('users')
+    .orderBy('emailLower').startAt(q).endAt(q + '\uf8ff').limit(10).get();
+  emailSnap.forEach(d => { if(!seen.has(d.id)){ seen.add(d.id); docs.push(d); } });
+  if(/^[0-9+]{3,}$/.test(raw)){
+    const phoneSnap = await db.collection('users')
+      .orderBy('phone').startAt(raw).endAt(raw + '\uf8ff').limit(10).get();
+    phoneSnap.forEach(d => { if(!seen.has(d.id)){ seen.add(d.id); docs.push(d); } });
+  }
+  results.innerHTML = '';
+  docs.forEach(docSnap => {
+    if(docSnap.id === currentUser.uid) return;
+    const u = docSnap.data();
+    const div = document.createElement('div');
+    div.className = 'chat-item';
+    div.innerHTML = `<div class="avatar-circle" style="${avatarStyle(u.name)}">${initials(u.name)}</div>
+      <div class="chat-info"><div class="chat-name">${escapeHtml(u.name)}</div><div class="chat-preview">${escapeHtml(u.email)}${u.phone ? ' · ' + escapeHtml(u.phone) : ''}</div></div>`;
+    div.onclick = async () => {
+      const cid = chatIdFor(currentUser.uid, docSnap.id);
+      await db.collection('chats').doc(cid).set({participants:[currentUser.uid, docSnap.id]}, {merge:true});
+      closeModal('newChatModal');
+      openChat(cid, {uid:docSnap.id, ...u});
+    };
+    results.appendChild(div);
+  });
+});
+
+/* ---------------- MODALS ---------------- */
+function openModal(id){ $(id).classList.add('active'); }
+function closeModal(id){ $(id).classList.remove('active'); }
+document.querySelectorAll('[data-close]').forEach(btn => {
+  btn.onclick = () => closeModal(btn.dataset.close);
+});
+document.querySelectorAll('.modal-overlay').forEach(ov => {
+  ov.addEventListener('click', e => { if(e.target === ov) ov.classList.remove('active'); });
+});
+
+/* ---------------- PROFILE ---------------- */
+$('myProfileBtn').onclick = () => {
+  $('profileAvatarBig').textContent = initials(currentUserData.name);
+  $('profileAvatarBig').style.cssText = avatarStyle(currentUserData.name);
+  $('profileNameInput').value = currentUserData.name || '';
+  $('profilePhoneInput').value = currentUserData.phone || '';
+  $('profileStatusInput').value = currentUserData.status || '';
+  openModal('profileModal');
+};
+$('saveProfileBtn').onclick = async () => {
+  const name = $('profileNameInput').value.trim();
+  const phone = $('profilePhoneInput').value.trim();
+  const status = $('profileStatusInput').value.trim();
+  if(!name) return;
+  if(phone && !/^[0-9+\-\s]{7,15}$/.test(phone)){ toast('সঠিক মোবাইল নাম্বার দিন।'); return; }
+  await db.collection('users').doc(currentUser.uid).update({name, phone, status});
+  currentUserData.name = name; currentUserData.phone = phone; currentUserData.status = status;
+  $('myName').textContent = name;
+  $('myAvatar').textContent = initials(name);
+  $('myAvatar').style.cssText = avatarStyle(name);
+  closeModal('profileModal');
+  toast('প্রোফাইল হালনাগাদ হয়েছে');
+};
+
+/* ---------------- SETTINGS ---------------- */
+$('settingsBtn').onclick = () => openModal('settingsModal');
+['darkToggle','soundToggle','presenceToggle'].forEach(id => {
+  $(id).onclick = () => $(id).classList.toggle('on');
+});
+$('notifToggle').onclick = async () => {
+  const turningOn = !$('notifToggle').classList.contains('on');
+  if(turningOn && 'Notification' in window && Notification.permission !== 'granted'){
+    const perm = await Notification.requestPermission();
+    if(perm !== 'granted'){ toast('নোটিফিকেশনের অনুমতি দেওয়া হয়নি।'); return; }
+    setupPushNotifications();
+  }
+  $('notifToggle').classList.toggle('on');
+};
+
+/* ---------------- PUSH NOTIFICATIONS (FCM, for closed/background tabs) ---------------- */
+async function setupPushNotifications(){
+  if(!messaging || !('serviceWorker' in navigator)) return;
+  try{
+    const reg = await navigator.serviceWorker.register('firebase-messaging-sw.js');
+    if(Notification.permission !== 'granted') return;
+    const token = await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
+    if(token){
+      await db.collection('users').doc(currentUser.uid).set({
+        fcmTokens: firebase.firestore.FieldValue.arrayUnion(token)
+      }, {merge:true});
+    }
+    // অ্যাপ ফোকাসে থাকা অবস্থায় পুশ এলে কিছু করার দরকার নেই —
+    // Firestore-এর রিয়েল-টাইম লিসেনার ইতিমধ্যেই শব্দ ও টোস্ট দেখিয়ে দেয়
+    messaging.onMessage(() => {});
+  }catch(err){
+    console.warn('Push notification setup skipped:', err.message);
+  }
+}
+/* ---------------- WEBRTC CALLING ---------------- */
+const rtcConfig = { iceServers:[{urls:'stun:stun.l.google.com:19302'}] };
+
+// রিমোট স্ট্রিম অ্যাটাচ করা + অটোপ্লে ব্লক হলে "ট্যাপ করে শব্দ চালু করুন" ফলব্যাক
+function attachRemoteStream(stream, isVideoCall){
+  const remoteVideo = $('remoteVideo');
+  remoteVideo.srcObject = stream;
+  $('callVideos').classList.toggle('audio-only', !isVideoCall);
+  const tryPlay = () => remoteVideo.play().catch(() => { $('unmuteBanner').classList.add('show'); });
+  tryPlay();
+}
+$('unmuteBanner').onclick = () => {
+  $('remoteVideo').play().catch(()=>{});
+  $('unmuteBanner').classList.remove('show');
+};
+
+// ICE ক্যান্ডিডেট রিমোট ডেসক্রিপশন সেট হওয়ার আগে চলে এলে হারিয়ে না গিয়ে সারিতে জমা থাকে
+let pendingIceCandidates = [];
+function addIceCandidateSafe(pc, data){
+  if(pc && pc.remoteDescription && pc.remoteDescription.type){
+    pc.addIceCandidate(new RTCIceCandidate(data)).catch(()=>{});
+  }else{
+    pendingIceCandidates.push(data);
+  }
+}
+async function flushPendingIceCandidates(pc){
+  const queued = pendingIceCandidates;
+  pendingIceCandidates = [];
+  for(const data of queued){
+    await pc.addIceCandidate(new RTCIceCandidate(data)).catch(()=>{});
+  }
+}
+
+function mediaErrorMessage(err){
+  if(err.name === 'NotFoundError' || err.name === 'OverconstrainedError') return `এই ডিভাইসে ক্যামেরা/মাইক্রোফোন খুঁজে পাওয়া যায়নি। (${err.name})`;
+  if(err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') return `ক্যামেরা/মাইক্রোফোনের অনুমতি দেওয়া হয়নি। ব্রাউজারের সাইট সেটিংস থেকে অনুমতি দিন। (${err.name})`;
+  if(err.name === 'NotReadableError') return `ক্যামেরা/মাইক্রোফোন অন্য কোনো অ্যাপ ব্যবহার করছে। (${err.name})`;
+  return `ক্যামেরা/মাইক্রোফোন চালু করা যায়নি। (${err.name || err.message || 'অজানা সমস্যা'})`;
+}
+
+// লিংক ইন-অ্যাপ ব্রাউজারে (ফেসবুক/মেসেঞ্জারের মতো) খোলা হলে বা HTTPS না হলে
+// getUserMedia আদৌ থাকে না — সেই ক্ষেত্রে আগে থেকেই স্পষ্ট বার্তা দেখানো
+function checkMediaSupport(){
+  if(!window.isSecureContext){
+    toast('এই সাইটটা HTTPS দিয়ে খোলা নেই বলে ক্যামেরা/মাইক কাজ করবে না।');
+    return false;
+  }
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    toast('এই ব্রাউজার/অ্যাপে ক্যামেরা-মাইক সমর্থিত না। লিংকটা Chrome বা Safari-তে সরাসরি খুলে দেখুন (Facebook/Messenger-এর ভিতরের ব্রাউজারে খুললে কাজ করে না)।');
+    return false;
+  }
+  return true;
+}
+
+function renderCallControls(state){
+  const c = $('callControls');
+  if(state === 'incoming'){
+    c.innerHTML = `
+      <button class="call-btn end" id="declineCallBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.8 19.8 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.8 19.8 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.13.96.36 1.9.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0122 16.92z"/></svg></button>
+      <button class="call-btn accept" id="acceptCallBtn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.8 19.8 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.8 19.8 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.13.96.36 1.9.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0122 16.92z"/></svg></button>`;
+    $('declineCallBtn').onclick = () => endCall('declined');
+    $('acceptCallBtn').onclick = acceptCall;
+  }else{
+    c.innerHTML = `
+      <button class="call-btn active-toggle" id="muteBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4"/></svg></button>
+      <button class="call-btn end" id="hangupBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.8 19.8 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.8 19.8 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.13.96.36 1.9.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0122 16.92z"/></svg></button>
+      <button class="call-btn active-toggle" id="camBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg></button>`;
+    $('hangupBtn').onclick = () => endCall('ended');
+    $('muteBtn').onclick = () => toggleTrack('audio', $('muteBtn'));
+    $('camBtn').onclick = () => toggleTrack('video', $('camBtn'));
+  }
+}
+
+function toggleTrack(kind, btn){
+  if(!localStream) return;
+  const tracks = kind === 'audio' ? localStream.getAudioTracks() : localStream.getVideoTracks();
+  tracks.forEach(t => t.enabled = !t.enabled);
+  btn.style.opacity = tracks[0] && tracks[0].enabled ? '1' : '.45';
+}
+
+async function startCall(video){
+  if(!activeChatPeer) return;
+  if(!checkMediaSupport()) return;
+  currentCallId = chatIdFor(currentUser.uid, activeChatPeer.uid) + '_' + Date.now();
+  isCaller = true;
+  pendingIceCandidates = [];
+  $('callAvatar').textContent = initials(activeChatPeer.name);
+  $('callAvatar').style.cssText = avatarStyle(activeChatPeer.name);
+  $('callName').textContent = activeChatPeer.name;
+  $('callStatus').textContent = 'রিং হচ্ছে...';
+  $('callOverlay').classList.add('active');
+  $('unmuteBanner').classList.remove('show');
+  renderCallControls('outgoing');
+
+  try{
+    localStream = await navigator.mediaDevices.getUserMedia({audio:true, video});
+  }catch(err){
+    if(video && (err.name === 'NotFoundError' || err.name === 'OverconstrainedError')){
+      toast('ক্যামেরা পাওয়া যায়নি, শুধু ভয়েস কল দিয়ে চেষ্টা করা হচ্ছে...');
+      try{
+        localStream = await navigator.mediaDevices.getUserMedia({audio:true, video:false});
+        video = false;
+      }catch(err2){ toast(mediaErrorMessage(err2)); endCall('failed'); return; }
+    }else{
+      toast(mediaErrorMessage(err)); endCall('failed'); return;
+    }
+  }
+  $('callVideos').classList.toggle('audio-only', !video);
+  $('localVideo').srcObject = localStream;
+  $('localVideo').style.display = video ? '' : 'none';
+
+  peerConnection = new RTCPeerConnection(rtcConfig);
+  localStream.getTracks().forEach(t => peerConnection.addTrack(t, localStream));
+  peerConnection.ontrack = e => attachRemoteStream(e.streams[0], video);
+
+  const callRef = db.collection('calls').doc(currentCallId);
+  const candidatesCaller = callRef.collection('callerCandidates');
+  peerConnection.onicecandidate = e => { if(e.candidate) candidatesCaller.add(e.candidate.toJSON()); };
+
+  const offer = await peerConnection.createOffer();
+  await peerConnection.setLocalDescription(offer);
+  await callRef.set({
+    callerId: currentUser.uid, callerName: currentUserData.name,
+    calleeId: activeChatPeer.uid, video, status:'ringing',
+    offer:{type:offer.type, sdp:offer.sdp}, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+
+  callUnsub = callRef.onSnapshot(async snap => {
+    const data = snap.data();
+    if(!data) return;
+    if(data.status === 'accepted' && data.answer && peerConnection && !peerConnection.currentRemoteDescription){
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+      await flushPendingIceCandidates(peerConnection);
+      $('callStatus').textContent = '০০:০০';
+      startCallTimer();
+    }
+    if(data.status === 'declined' || data.status === 'ended'){ endCall(null, true); }
+  });
+  callRef.collection('calleeCandidates').onSnapshot(snap => {
+    snap.docChanges().forEach(ch => {
+      if(ch.type === 'added' && peerConnection){ addIceCandidateSafe(peerConnection, ch.doc.data()); }
+    });
+  });
+}
+$('voiceCallBtn').onclick = () => startCall(false);
+$('videoCallBtn').onclick = () => startCall(true);
+
+function listenForIncomingCalls(){
+  db.collection('calls').where('calleeId','==', currentUser.uid).where('status','==','ringing')
+    .onSnapshot(snap => {
+      snap.docChanges().forEach(ch => {
+        if(ch.type === 'added'){
+          const data = ch.doc.data();
+          currentCallId = ch.doc.id;
+          isCaller = false;
+          $('callAvatar').textContent = initials(data.callerName);
+          $('callAvatar').style.cssText = avatarStyle(data.callerName);
+          $('callName').textContent = data.callerName;
+          $('callStatus').textContent = 'ইনকামিং কল...';
+          $('callOverlay').classList.add('active');
+          $('callVideos').classList.toggle('audio-only', !data.video);
+          renderCallControls('incoming');
+          window.__pendingCallData = data;
+
+          callUnsub = db.collection('calls').doc(currentCallId).onSnapshot(s => {
+            const d = s.data();
+            if(d && (d.status === 'ended')) endCall(null, true);
+          });
+        }
+      });
+    });
+}
+
+async function acceptCall(){
+  const data = window.__pendingCallData;
+  if(!data) return;
+  if(!checkMediaSupport()){ endCall('failed'); return; }
+  let video = !!data.video;
+  try{
+    localStream = await navigator.mediaDevices.getUserMedia({audio:true, video});
+  }catch(err){
+    if(video && (err.name === 'NotFoundError' || err.name === 'OverconstrainedError')){
+      toast('ক্যামেরা পাওয়া যায়নি, শুধু ভয়েস দিয়ে যোগ দেওয়া হচ্ছে...');
+      try{
+        localStream = await navigator.mediaDevices.getUserMedia({audio:true, video:false});
+        video = false;
+      }catch(err2){ toast(mediaErrorMessage(err2)); endCall('failed'); return; }
+    }else{
+      toast(mediaErrorMessage(err)); endCall('failed'); return;
+    }
+  }
+  $('callVideos').classList.toggle('audio-only', !video);
+  $('localVideo').srcObject = localStream;
+  $('localVideo').style.display = video ? '' : 'none';
+
+  peerConnection = new RTCPeerConnection(rtcConfig);
+  localStream.getTracks().forEach(t => peerConnection.addTrack(t, localStream));
+  peerConnection.ontrack = e => attachRemoteStream(e.streams[0], video);
+
+  const callRef = db.collection('calls').doc(currentCallId);
+  const candidatesCallee = callRef.collection('calleeCandidates');
+  peerConnection.onicecandidate = e => { if(e.candidate) candidatesCallee.add(e.candidate.toJSON()); };
+
+  await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+  await flushPendingIceCandidates(peerConnection);
+  const answer = await peerConnection.createAnswer();
+  await peerConnection.setLocalDescription(answer);
+  await callRef.update({status:'accepted', answer:{type:answer.type, sdp:answer.sdp}});
+
+  callRef.collection('callerCandidates').onSnapshot(snap => {
+    snap.docChanges().forEach(ch => {
+      if(ch.type === 'added' && peerConnection){ addIceCandidateSafe(peerConnection, ch.doc.data()); }
+    });
+  });
+  renderCallControls('active');
+  $('callStatus').textContent = '০০:০০';
+  startCallTimer();
+}
+
+let callTimerInt = null, callSeconds = 0;
+function startCallTimer(){
+  renderCallControls('active');
+  callSeconds = 0;
+  clearInterval(callTimerInt);
+  callTimerInt = setInterval(() => {
+    callSeconds++;
+    const m = String(Math.floor(callSeconds/60)).padStart(2,'0');
+    const s = String(callSeconds%60).padStart(2,'0');
+    $('callStatus').textContent = `${m}:${s}`;
+  }, 1000);
+}
+
+async function endCall(reason, silent){
+  if(currentCallId && !silent){
+    await db.collection('calls').doc(currentCallId).update({status: reason || 'ended'}).catch(()=>{});
+  }
+  clearInterval(callTimerInt);
+  if(callUnsub){ callUnsub(); callUnsub = null; }
+  if(peerConnection){ peerConnection.close(); peerConnection = null; }
+  if(localStream){ localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+  pendingIceCandidates = [];
+  $('remoteVideo').srcObject = null;
+  $('localVideo').srcObject = null;
+  $('unmuteBanner').classList.remove('show');
+  $('callOverlay').classList.remove('active');
+  $('callVideos').classList.remove('audio-only');
+  currentCallId = null;
+  window.__pendingCallData = null;
+}
+
+/* ---------------- Enter key on auth fields ---------------- */
+[$('loginEmail'),$('loginPass')].forEach(el => el.addEventListener('keydown', e => { if(e.key==='Enter') $('loginBtn').click(); }));
+[$('regName'),$('regPhone'),$('regEmail'),$('regPass')].forEach(el => el.addEventListener('keydown', e => { if(e.key==='Enter') $('registerBtn').click(); }));
+</script>
+</body>
+</html>
